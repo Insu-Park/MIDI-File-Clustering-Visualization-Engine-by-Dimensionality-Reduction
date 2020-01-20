@@ -1,0 +1,270 @@
+
+# 서울시립대학교 2019-2 소프트웨어응용 최종프로젝트
+# 음원 파일의 차원 축소를 이용한 클러스터링 시각화 엔진
+# MIDI File Clustering Visualization Engine by Dimensionality Reduction
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.style as ms
+import plotly.graph_objects as go
+
+import librosa
+import librosa.display
+import sys
+import glob
+
+import math
+import pandas as pd
+import seaborn as sns
+
+import sklearn
+from sklearn.manifold import TSNE
+from sklearn.cluster import KMeans
+from matplotlib import rc, font_manager
+rc('font', family="New Gulim")
+ms.use('seaborn-muted')
+
+if not sys.warnoptions:
+    import warnings
+    warnings.simplefilter("ignore")
+
+# 경로 안의 음원 파일 불러오기 위한 선언
+path = "./mp3/*"
+file_list = glob.glob(path)
+file_name = np.array(file_list)
+
+arr = []
+rmin_v = np.array(arr)
+rmax_v = np.array(arr)
+mfcc_v = np.array(arr)
+tonnetz_v = np.array(arr)
+flatness_v = np.array(arr)
+
+for file in file_list:
+    y, sr = librosa.load(file, offset=60, duration=30)
+    
+    # rolloff 측정 (roll_percent=0.85, 최대 frequency)
+    rolloff_max = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.85)
+        
+    # rolloff 측정 (roll_percent=0.1, 최소 frequency)  
+    rolloff_min = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.1)
+    
+    # mfcc 측정, 전처리
+    mfccs = librosa.feature.mfcc(y=y, sr=sr)
+    mfccs = sklearn.preprocessing.scale(mfccs, axis=1)
+    mfcc_f = np.ravel(mfccs)
+    
+    # tonnetz 측정, 전처리
+    y = librosa.effects.harmonic(y)
+    tonnet = librosa.feature.tonnetz(y=y, sr=sr)
+    
+    # flatness 측정 (배경음)
+    flatness = librosa.feature.spectral_flatness(y=y)
+    
+    # 배열로 저장
+    if file == file_list[0]:
+        rmax_v = rolloff_max
+        rmin_v = rolloff_min
+        mfcc_v = mfcc_f
+        tonnetz_v = tonnet
+        flatness_v = flatness
+    else:
+        rmax_v = np.vstack((rmax_v, rolloff_max))
+        rmin_v = np.vstack((rmin_v, rolloff_min))
+        mfcc_v = np.vstack((mfcc_v, mfcc_f))
+        tonnetz_v = np.vstack((tonnetz_v, tonnet))
+        flatness_v = np.vstack((flatness_v, flatness))
+
+# 중복 실행을 방지하기 위해 파일로 저장
+np.savetxt('mp3_filename.txt', file_name, fmt="%s")
+np.savetxt('rmax_v_data.txt', rmax_v, fmt='%.6f')
+np.savetxt('rmin_v_data.txt', rmin_v, fmt='%.6f')
+np.savetxt('mfcc_v_data.txt', mfcc_v, fmt='%.6f')
+np.savetxt('tonnetz_v_data.txt', tonnetz_v, fmt='%.6f')
+np.savetxt('flatness_v_data.txt', flatness_v, fmt='%.6f')
+
+# 저장된 파일 불러오기
+file_name = np.loadtxt('mp3_filename.txt', dtype=np.str, delimiter='\n')
+rmax_v = np.loadtxt('rmax_v_data.txt')
+rmin_v = np.loadtxt('rmin_v_data.txt')
+mfcc_v = np.loadtxt('mfcc_v_data.txt')
+tonnetz_v = np.loadtxt('tonnetz_v_data.txt')
+flatness_v = np.loadtxt('flatness_v_data.txt')
+
+# 구간별 분석 위한 변수
+div=60
+frame = math.floor(len(rolloff_max[0]) / div)
+rmax = np.array(arr)
+rmin = np.array(arr)
+mfcc = np.array(arr)
+tonnetz = np.array(arr)
+flatness = np.array(arr)
+
+# TSNE 사용 전처리
+tsne = TSNE(n_components=1, random_state=0, perplexity=10, n_iter=1000)
+
+# 구간별 rolloff max값 측정
+for i in range(0, div-1):
+    rmax_i = tsne.fit_transform(rmax_v[:,i*frame:i*frame+div])
+    if i == 0:
+        rmax = rmax_i
+    else:
+        rmax = np.hstack((rmax, rmax_i))        
+
+# 구간별 rolloff min값 측정
+for i in range(0, div-1):
+    rmin_i = tsne.fit_transform(rmin_v[:,i*frame:i*frame+div])
+    if i == 0:
+        rmin = rmin_i
+    else:
+        rmin = np.hstack((rmin, rmin_i))        
+
+# 구간별 mfcc값 측정
+for i in range(0, div-1):
+    mfcc_i = tsne.fit_transform(mfcc_v[:,i*frame:i*frame+div])
+    if i == 0:
+        mfcc = mfcc_i
+    else:
+        mfcc = np.hstack((rmin, mfcc_i))
+
+# 구간별 tonnetz값 측정
+for i in range(0, div-1):
+    tonnet_i = tsne.fit_transform(mfcc_v[:,i*frame:i*frame+div])
+    if i == 0:
+        tonnetz = tonnet_i
+    else:
+        tonnetz = np.hstack((tonnetz, tonnet_i))        
+
+# 구간별 flatness값 측정        
+for i in range(0, div-1):
+    flatness_i = tsne.fit_transform(flatness_v[:,i*frame:i*frame+div])
+    if i == 0:
+        flatness = flatness_i
+    else:
+        flatness = np.hstack((flatness, flatness_i))  
+        
+vector = np.hstack((rmax, rmin, mfcc, tonnetz, flatness))
+
+# 파일 이름 인덱싱
+for i in range(0, len(file_name)):
+    file_name[i] = file_name[i][6:]
+
+# 데이터에 대해 TSNE 적용
+X_2d = TSNE(n_components=2, random_state=0, perplexity=10, n_iter=2000).fit_transform(vector)
+
+
+# 분석된 자료 가시화를 위한 데이터 프레임 사용
+df = pd.DataFrame(columns=['x', 'y'])
+
+j=0
+for i in X_2d:
+    df.loc[j] = i
+    j += 1
+
+# k-means clustering 
+km = KMeans(n_clusters=40).fit(X_2d)
+
+# 데이터 프레임 자료 추가
+df['cluster_id'] = km.labels_
+df['file_name'] = file_name
+df['rgba'] = df['cluster_id']
+
+# 클러스터별 색상 추가
+for i in range(0, len(df)):
+    if df['rgba'][i] == 0:
+        df['rgba'][i] = 'rgba(255, 0, 0, 0.8)'
+    elif df['rgba'][i] == 1:
+        df['rgba'][i] = 'rgba(0, 255, 0, 0.8)'
+    elif df['rgba'][i] == 2:
+        df['rgba'][i] = 'rgba(0, 0, 255, 0.8)'
+    elif df['rgba'][i] == 3:
+        df['rgba'][i] = 'rgba(255, 255, 0, 0.8)'
+    elif df['rgba'][i] == 4:
+        df['rgba'][i] = 'rgba(255, 0, 255, 0.8)'
+    elif df['rgba'][i] == 5:
+        df['rgba'][i] = 'rgba(0, 255, 255, 0.8)'
+    elif df['rgba'][i] == 6:
+        df['rgba'][i] = 'rgba(102, 0, 102, 0.8)'    
+    elif df['rgba'][i] == 7:
+        df['rgba'][i] = 'rgba(255, 204, 0, 0.8)'
+    elif df['rgba'][i] == 8:
+        df['rgba'][i] = 'rgba(153, 153, 0, 0.8)'
+    elif df['rgba'][i] == 9:
+        df['rgba'][i] = 'rgba(51, 0, 51, 0.8)'
+    elif df['rgba'][i] == 10:
+        df['rgba'][i] = 'rgba(255, 51, 102, 0.8)'
+    elif df['rgba'][i] == 11:
+        df['rgba'][i] = 'rgba(204, 0, 51, 0.8)'
+    elif df['rgba'][i] == 12:
+        df['rgba'][i] = 'rgba(153, 255, 0, 0.8)'
+    elif df['rgba'][i] == 13:
+        df['rgba'][i] = 'rgba(102, 204, 255, 0.8)'
+    elif df['rgba'][i] == 14:
+        df['rgba'][i] = 'rgba(0, 102, 153, 0.8)'
+    elif df['rgba'][i] == 15:
+        df['rgba'][i] = 'rgba(153, 255, 51, 0.8)'
+    elif df['rgba'][i] == 16:
+        df['rgba'][i] = 'rgba(153, 0, 51, 0.8)'
+    elif df['rgba'][i] == 17:
+        df['rgba'][i] = 'rgba(0, 153, 102, 0.8)'
+    elif df['rgba'][i] == 18:
+        df['rgba'][i] = 'rgba(153, 0, 255, 0.8)'
+    elif df['rgba'][i] == 19:
+        df['rgba'][i] = 'rgba(204, 51, 0, 0.8)'
+    elif df['rgba'][i] == 20:
+        df['rgba'][i] = 'rgba(0, 102, 51, 0.8)'
+    elif df['rgba'][i] == 21:
+        df['rgba'][i] = 'rgba(0, 153, 51, 0.8)'
+    elif df['rgba'][i] == 22:
+        df['rgba'][i] = 'rgba(255, 51, 0, 0.8)'
+    elif df['rgba'][i] == 23:
+        df['rgba'][i] = 'rgba(153, 255, 204, 0.8)'
+    elif df['rgba'][i] == 24:
+        df['rgba'][i] = 'rgba(153, 51, 255, 0.8)'
+    elif df['rgba'][i] == 25:
+        df['rgba'][i] = 'rgba(204, 102, 153, 0.8)'
+    elif df['rgba'][i] == 26:
+        df['rgba'][i] = 'rgba(255, 153, 204, 0.8)'
+    elif df['rgba'][i] == 27:
+        df['rgba'][i] = 'rgba(102, 0, 51, 0.8)'
+    elif df['rgba'][i] == 28:
+        df['rgba'][i] = 'rgba(0, 204, 51, 0.8)'
+    elif df['rgba'][i] == 29:
+        df['rgba'][i] = 'rgba(0, 102, 255, 0.8)'                                                    
+    elif df['rgba'][i] == 30:
+        df['rgba'][i] = 'rgba(255, 102, 204, 0.8)'
+    elif df['rgba'][i] == 31:
+        df['rgba'][i] = 'rgba(51, 102, 255, 0.8)'
+    elif df['rgba'][i] == 32:
+        df['rgba'][i] = 'rgba(0, 51, 102, 0.8)'
+    elif df['rgba'][i] == 33:
+        df['rgba'][i] = 'rgba(0, 51, 51, 0.8)'
+    elif df['rgba'][i] == 34:
+        df['rgba'][i] = 'rgba(153, 255, 255, 0.8)'
+    elif df['rgba'][i] == 35:
+        df['rgba'][i] = 'rgba(51, 0, 255, 0.8)'
+    elif df['rgba'][i] == 36:
+        df['rgba'][i] = 'rgba(51, 0, 0, 0.8)'
+    elif df['rgba'][i] == 37:
+        df['rgba'][i] = 'rgba(153, 51, 153, 0.8)'
+    elif df['rgba'][i] == 38:
+        df['rgba'][i] = 'rgba(255, 153, 102, 0.8)'
+    elif df['rgba'][i] == 39:
+        df['rgba'][i] = 'rgba(51, 51, 102, 0.8)'  
+        
+# 그래프 그리기
+fig = go.Figure(data=go.Scatter(x=df['x'],
+                                y=df['y'],
+                                mode='markers',
+                                marker_color=df['rgba'],
+                                text=df['file_name']))
+
+fig.update_layout(title='Using TSNE')
+fig.show()
+
+# 클러스터 순서로 정렬한 후 출력
+pd.set_option('display.max_rows', 1000)
+pd.set_option('display.max_columns', 1000)
+pd.set_option('display.width', 1000)
+df = df.sort_values(by=['cluster_id'], axis=0)
+print(df[['x', 'y', 'cluster_id', 'file_name']])
